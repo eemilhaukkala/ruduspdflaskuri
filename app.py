@@ -11,7 +11,7 @@ import base64
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("brick Rudus PDF -laskuri v47 — PDF näkyvissä sovelluksessa")
+st.title("brick Rudus PDF -laskuri v48 — PDF näkyy aina!")
 
 st.sidebar.write("Python-versio: 3.9+")
 
@@ -106,24 +106,33 @@ if uploaded_pdf:
     pdf_bytes = uploaded_pdf.read()
     pdf_stream = BytesIO(pdf_bytes)
 
-    # --- PDF-ESIKATSELU SUORAAN SOVELUKSESSA ---
+    # --- VAKAA PDF-ESIKATSELU ---
     st.markdown("### PDF-esikatselu")
     try:
-        # Koodaa base64
+        # Base64-koodaus
         base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-        # Upota iframe (pieni koko, skaalautuu)
+
+        # KÄYTÄ st.components.v1.html – VAKAA JA TOIMII CLOUDSISSA
         pdf_display = f'''
         <iframe 
             src="data:application/pdf;base64,{base64_pdf}" 
             width="100%" 
-            height="600px" 
-            style="border: none; border-radius: 8px;">
+            height="600" 
+            style="border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"
+            frameborder="0">
         </iframe>
         '''
-        st.markdown(pdf_display, unsafe_allow_html=True)
+        st.components.v1.html(pdf_display, height=620, scrolling=True)
+
     except Exception as e:
-        st.warning("PDF-esikatselu ei onnistunut. Voit ladata tiedoston:")
-        st.download_button("Lataa PDF", data=pdf_bytes, file_name=pdf_name, mime="application/pdf")
+        st.warning("PDF-esikatselu ei onnistunut. Voit avata tiedoston:")
+        st.download_button(
+            label="Avaa PDF selaimessa",
+            data=pdf_bytes,
+            file_name=pdf_name,
+            mime="application/pdf",
+            key="fallback_pdf"
+        )
 
     # --- HINNAT ---
     hinnat = {}
@@ -170,7 +179,7 @@ if uploaded_pdf:
                     betoni_prices.append(float(m.group(1).replace(",", ".")))
 
             if "kuljetus" in lower or "> 5,0 m3" in rivi:
-                for j in range(i, min(i+5, len(rivit))):
+                for j in range i, min(i+5, len(rivit))):
                     if "12,47" in rivit[j] and "€/m³" in rivit[j]:
                         m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivit[j])
                         if m:
