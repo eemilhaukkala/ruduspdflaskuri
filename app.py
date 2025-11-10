@@ -10,7 +10,7 @@ from io import BytesIO
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("brick Rudus PDF -laskuri v45 — Esikatselu toimii!")
+st.title("brick Rudus PDF -laskuri v46 — Toimii!")
 
 st.sidebar.write("Python-versio: 3.9+")
 
@@ -105,7 +105,7 @@ if uploaded_pdf:
     pdf_bytes = uploaded_pdf.read()
     pdf_stream = BytesIO(pdf_bytes)
 
-    # --- ESIKATSELU: KÄYTÄ DOWNLOAD + LINKKI (ei iframe!) ---
+    # --- ESIKATSELU: DOWNLOAD + LINKKI ---
     st.markdown("### PDF-esikatselu")
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -226,7 +226,7 @@ if uploaded_pdf:
                         "PDF_nimi": pdf_name,
                         "m3": m3,
                         "Pumppausaika_h": pumppausaika,
-                        "Palveluaika_min": palvelua Babaika,
+                        "Palveluaika_min": palveluaika,  # KORJATTU TÄHÄN
                         "Betonilaatu": laatu,
                         "Yhteensä_€_m3": row["Yhteensä €/m³"],
                         "Laskenta_ID": calc_id_val,
