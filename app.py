@@ -7,11 +7,11 @@ import os
 import hashlib
 from datetime import datetime
 from pypdf import PdfReader
-from io import BytesIO  # <--- LISÄÄ TÄMÄ
+from io import BytesIO
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("Jonen tarjous PDF -laskuri")
+st.title("brick Rudus PDF -laskuri v44 — Kaikki toimii!")
 
 st.sidebar.write("Python-versio: 3.9+")
 
@@ -60,6 +60,40 @@ m3 = st.sidebar.number_input("Pumpattava määrä (m³)", min_value=0.1, step=0.
 pumppausaika = st.sidebar.number_input("Pumppausaika (h)", min_value=0.0, step=0.5, value=2.0)
 palveluaika = st.sidebar.number_input("Palveluaika (min)", min_value=0, step=5, value=120)
 
+# --- LASKENTAFUNKTIO (Nyt määritelty!) ---
+def laske_taulukko(m3, pumppausaika, palveluaika, H):
+    betonilaadut = {k: v for k, v in H.items() if "betoni" in k.lower() or re.search(r"C\d{2}/\d{2}", k)}
+    if not betonilaadut:
+        raise ValueError("Ei betonilaatuja.")
+    
+    pump_h_per_m3 = (H.get("Pumppaus €/h", 0) * pumppausaika) / m3 if m3 > 0 else 0
+    charged_min = max(0, palveluaika - 25)
+    num_inc = math.ceil(charged_min / 5)
+    palvelu_per_m3 = (num_inc * H.get("Palveluaika €/5min", 0)) / m3 if m3 > 0 else 0
+    kuljetus_per_m3 = H.get("Kuljetus €/m³", 0)
+
+    rows = []
+    for laatu, bh in betonilaadut.items():
+        yhteensä = (
+            bh
+            + H.get("Ympäristölisä €/m³", 0)
+            + kuljetus_per_m3
+            + H.get("Pumppaus €/m³", 0)
+            + pump_h_per_m3
+            + palvelu_per_m3
+        )
+        rows.append({
+            "Betonilaatu": laatu.split("#")[0].strip() if "#" in laatu else laatu,
+            "Betonin hinta €/m³": bh,
+            "Ympäristölisä €/m³": H.get("Ympäristölisä €/m³", 0),
+            "Kuljetus €/m³": kuljetus_per_m3,
+            "Pumppaus €/m³ (kiinteä)": H.get("Pumppaus €/m³", 0),
+            "Pumppaus €/h → €/m³": round(pump_h_per_m3, 2),
+            "Palveluaika €/m³": round(palvelu_per_m3, 2),
+            "Yhteensä €/m³": round(yhteensä, 2),
+        })
+    return pd.DataFrame(rows).set_index("Betonilaatu")
+
 # --- PDF-LATAUS ---
 uploaded_pdf = st.file_uploader("Lataa Ruduksen tarjous (PDF)", type=["pdf"])
 
@@ -68,9 +102,9 @@ if uploaded_pdf:
     pdf_name = uploaded_pdf.name
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # --- LUE PDF VAIN KERRAN ---
-    pdf_bytes = uploaded_pdf.read()  # Lue kerran
-    pdf_stream = BytesIO(pdf_bytes)  # Luo streami
+    # --- LUE PDF KERRAN ---
+    pdf_bytes = uploaded_pdf.read()
+    pdf_stream = BytesIO(pdf_bytes)
 
     # --- ESIKATSELU ---
     try:
@@ -82,7 +116,7 @@ if uploaded_pdf:
     except Exception as e:
         st.error(f"Esikatseluvirhe: {e}")
 
-    # --- HINNAT (käytä streamiä) ---
+    # --- HINNAT ---
     hinnat = {}
     try:
         reader = PdfReader(pdf_stream)
@@ -157,6 +191,7 @@ if uploaded_pdf:
         st.json(hinnat, expanded=False)
 
         try:
+            # --- KÄYTÄ laske_taulukko ---
             df = laske_taulukko(m3, pumppausaika, palveluaika, hinnat)
             st.markdown("### Betonilaatujen hinnat (€/m³)")
             st.dataframe(df.style.format("{:,.2f}"), use_container_width=True)
@@ -209,7 +244,7 @@ if uploaded_pdf:
         except Exception as e:
             st.error(f"Laskentavirhe: {e}")
 
-    # --- HISTORIA (sama kuin ennen) ---
+    # --- HISTORIA ---
     st.markdown("---")
     st.markdown("### Laskuhistoria")
     history = load_history()
