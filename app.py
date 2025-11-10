@@ -10,7 +10,7 @@ import base64
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("brick Rudus PDF -laskuri v50 — PDF näkyy aina!")
+st.title("Laskuri!")
 
 # --- SESSION STATE (ei tiedostoja) ---
 if "history" not in st.session_state:
