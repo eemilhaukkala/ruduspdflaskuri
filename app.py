@@ -6,11 +6,12 @@ import math
 import os
 import hashlib
 from datetime import datetime
-from pypdf import PdfReader  # TOIMII CLOUDSISSA!
+from pypdf import PdfReader
+from io import BytesIO  # <--- LISÄÄ TÄMÄ
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("Jonen mallin betonilaskuri")
+st.title("Jonen tarjous PDF -laskuri")
 
 st.sidebar.write("Python-versio: 3.9+")
 
@@ -62,129 +63,93 @@ palveluaika = st.sidebar.number_input("Palveluaika (min)", min_value=0, step=5, 
 # --- PDF-LATAUS ---
 uploaded_pdf = st.file_uploader("Lataa Ruduksen tarjous (PDF)", type=["pdf"])
 
-# --- HINTOJEN POIMINTA (pypdf + regex) ---
-def hae_hinnat_pypdf(pdf_file):
-    hinnat = {}
-    teksti = ""
-    try:
-        reader = PdfReader(pdf_file)
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                teksti += page_text + "\n"
-    except Exception as e:
-        st.error(f"PDF-lukuvirhe: {e}")
-        return {}
-
-    rivit = [r.strip() for r in teksti.splitlines() if r.strip()]
-    betoni_section = False
-    betoni_descs = []
-    betoni_prices = []
-
-    for i, rivi in enumerate(rivit):
-        lower = rivi.lower()
-
-        # Ympäristölisä
-        if "ympäristölisä" in lower:
-            for j in range(i, min(i+5, len(rivit))):
-                if "2,20" in rivit[j] and "€/m³" in rivit[j]:
-                    m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivit[j])
-                    if m:
-                        hinnat["Ympäristölisä €/m³"] = float(m.group(1).replace(",", "."))
-                        break
-
-        # Palveluaika
-        if "palveluaikakorvaus" in lower or ("palveluaika" in lower and "€" in rivi):
-            m = re.search(r"(\d+[.,]\d+)", rivi)
-            if m:
-                hinnat["Palveluaika €/5min"] = float(m.group(1).replace(",", "."))
-
-        # Betonilaadut
-        if "nettohinnat betoneista" in lower:
-            betoni_section = True
-            continue
-        if betoni_section and ("kuljetus" in lower or "ympäristölisä" in lower):
-            betoni_section = False
-
-        if betoni_section:
-            if re.search(r"C\d{2}/\d{2}", rivi) and "betoni" in lower:
-                betoni_descs.append(rivi.strip())
-            m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivi)
-            if m:
-                betoni_prices.append(float(m.group(1).replace(",", ".")))
-
-        # Kuljetus
-        if "kuljetus" in lower or "> 5,0 m3" in rivi:
-            for j in range(i, min(i+5, len(rivit))):
-                if "12,47" in rivit[j] and "€/m³" in rivit[j]:
-                    m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivit[j])
-                    if m:
-                        hinnat["Kuljetus €/m³"] = float(m.group(1).replace(",", "."))
-                        break
-
-        # Pumppaus
-        if "pumppaus" in lower and "€" in rivi:
-            match_h = re.search(r"(\d+[.,]\d+)\s*€\s*/?\s*h", rivi)
-            match_m3 = re.search(r"(\d+[.,]\d+)\s*€\s*/?\s*m", rivi)
-            if match_h:
-                hinnat["Pumppaus €/h"] = float(match_h.group(1).replace(",", "."))
-            if match_m3:
-                hinnat["Pumppaus €/m³"] = float(match_m3.group(1).replace(",", "."))
-
-    if len(betoni_descs) == len(betoni_prices):
-        for desc, price in zip(betoni_descs, betoni_prices):
-            hinnat[desc] = price
-
-    return hinnat
-
-# --- LASKENTA (sama kuin ennen) ---
-def laske_taulukko(m3, pumppausaika, palveluaika, H):
-    betonilaadut = {k: v for k, v in H.items() if "betoni" in k.lower() or re.search(r"C\d{2}/\d{2}", k)}
-    if not betonilaadut:
-        raise ValueError("Ei betonilaatuja.")
-    
-    pump_h_per_m3 = (H.get("Pumppaus €/h", 0) * pumppausaika) / m3 if m3 > 0 else 0
-    charged_min = max(0, palveluaika - 25)
-    num_inc = math.ceil(charged_min / 5)
-    palvelu_per_m3 = (num_inc * H.get("Palveluaika €/5min", 0)) / m3 if m3 > 0 else 0
-    kuljetus_per_m3 = H.get("Kuljetus €/m³", 0)
-
-    rows = []
-    for laatu, bh in betonilaadut.items():
-        yhteensä = (
-            bh
-            + H.get("Ympäristölisä €/m³", 0)
-            + kuljetus_per_m3
-            + H.get("Pumppaus €/m³", 0)
-            + pump_h_per_m3
-            + palvelu_per_m3
-        )
-        rows.append({
-            "Betonilaatu": laatu.split("#")[0].strip() if "#" in laatu else laatu,
-            "Betonin hinta €/m³": bh,
-            "Ympäristölisä €/m³": H.get("Ympäristölisä €/m³", 0),
-            "Kuljetus €/m³": kuljetus_per_m3,
-            "Pumppaus €/m³ (kiinteä)": H.get("Pumppaus €/m³", 0),
-            "Pumppaus €/h → €/m³": round(pump_h_per_m3, 2),
-            "Palveluaika €/m³": round(palvelu_per_m3, 2),
-            "Yhteensä €/m³": round(yhteensä, 2),
-        })
-    return pd.DataFrame(rows).set_index("Betonilaatu")
-
 # --- PÄÄUI ---
 if uploaded_pdf:
     pdf_name = uploaded_pdf.name
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Esikatselu
+    # --- LUE PDF VAIN KERRAN ---
+    pdf_bytes = uploaded_pdf.read()  # Lue kerran
+    pdf_stream = BytesIO(pdf_bytes)  # Luo streami
+
+    # --- ESIKATSELU ---
     try:
-        base64_pdf = base64.b64encode(uploaded_pdf.read()).decode("utf-8")
-        st.markdown(f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600"></iframe>', unsafe_allow_html=True)
-        uploaded_pdf.seek(0)
+        base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
+        st.markdown(
+            f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600"></iframe>',
+            unsafe_allow_html=True
+        )
     except Exception as e:
         st.error(f"Esikatseluvirhe: {e}")
 
-    hinnat = hae_hinnat_pypdf(uploaded_pdf)
+    # --- HINNAT (käytä streamiä) ---
+    hinnat = {}
+    try:
+        reader = PdfReader(pdf_stream)
+        teksti = ""
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                teksti += page_text + "\n"
+        
+        rivit = [r.strip() for r in teksti.splitlines() if r.strip()]
+        betoni_section = False
+        betoni_descs = []
+        betoni_prices = []
+
+        for i, rivi in enumerate(rivit):
+            lower = rivi.lower()
+
+            if "ympäristölisä" in lower:
+                for j in range(i, min(i+5, len(rivit))):
+                    if "2,20" in rivit[j] and "€/m³" in rivit[j]:
+                        m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivit[j])
+                        if m:
+                            hinnat["Ympäristölisä €/m³"] = float(m.group(1).replace(",", "."))
+                            break
+
+            if "palveluaikakorvaus" in lower or ("palveluaika" in lower and "€" in rivi):
+                m = re.search(r"(\d+[.,]\d+)", rivi)
+                if m:
+                    hinnat["Palveluaika €/5min"] = float(m.group(1).replace(",", "."))
+
+            if "nettohinnat betoneista" in lower:
+                betoni_section = True
+                continue
+            if betoni_section and ("kuljetus" in lower or "ympäristölisä" in lower):
+                betoni_section = False
+
+            if betoni_section:
+                if re.search(r"C\d{2}/\d{2}", rivi) and "betoni" in lower:
+                    betoni_descs.append(rivi.strip())
+                m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivi)
+                if m:
+                    betoni_prices.append(float(m.group(1).replace(",", ".")))
+
+            if "kuljetus" in lower or "> 5,0 m3" in rivi:
+                for j in range(i, min(i+5, len(rivit))):
+                    if "12,47" in rivit[j] and "€/m³" in rivit[j]:
+                        m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivit[j])
+                        if m:
+                            hinnat["Kuljetus €/m³"] = float(m.group(1).replace(",", "."))
+                            break
+
+            if "pumppaus" in lower and "€" in rivi:
+                match_h = re.search(r"(\d+[.,]\d+)\s*€\s*/?\s*h", rivi)
+                match_m3 = re.search(r"(\d+[.,]\d+)\s*€\s*/?\s*m", rivi)
+                if match_h:
+                    hinnat["Pumppaus €/h"] = float(match_h.group(1).replace(",", "."))
+                if match_m3:
+                    hinnat["Pumppaus €/m³"] = float(match_m3.group(1).replace(",", "."))
+
+        if len(betoni_descs) == len(betoni_prices):
+            for desc, price in zip(betoni_descs, betoni_prices):
+                hinnat[desc] = price
+
+    except Exception as e:
+        st.error(f"PDF-lukuvirhe: {e}")
+        hinnat = {}
+
     if not hinnat:
         st.error("Ei hintoja PDF:stä. Varmista, että se on Ruduksen tarjous.")
     else:
@@ -197,7 +162,7 @@ if uploaded_pdf:
             st.dataframe(df.style.format("{:,.2f}"), use_container_width=True)
             st.info(f"**{m3} m³** | **{pumppausaika} h** | **{palveluaika} min**")
 
-            # TALLENNA
+            # --- TALLENNA ---
             history = load_history()
             calc_id_val = calc_id(pdf_name, m3, pumppausaika, palveluaika)
             safe_name = safe_filename(f"{pdf_name}_{m3}m3_{pumppausaika}h_{palveluaika}min_{calc_id_val}")
@@ -244,7 +209,7 @@ if uploaded_pdf:
         except Exception as e:
             st.error(f"Laskentavirhe: {e}")
 
-    # --- HISTORIA ---
+    # --- HISTORIA (sama kuin ennen) ---
     st.markdown("---")
     st.markdown("### Laskuhistoria")
     history = load_history()
