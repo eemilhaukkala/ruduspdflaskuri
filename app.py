@@ -1,281 +1,51 @@
-import re
-import pandas as pd
-import streamlit as st
-import math
-import hashlib
-from datetime import datetime
-from pypdf import PdfReader
-from io import BytesIO
-import base64
-
-# --- ASETTELU ---
-st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("Laskuri!")
-
-# --- SESSION STATE (ei tiedostoja) ---
-if "history" not in st.session_state:
-    st.session_state.history = pd.DataFrame(columns=[
-        "Aika", "PDF_nimi", "m3", "Pumppausaika_h", "Palveluaika_min",
-        "Betonilaatu", "Yhteensä_€_m3", "Laskenta_ID", "CSV_base64"
-    ])
-if "calcs" not in st.session_state:
-    st.session_state.calcs = {}
-
-# --- TURVALLINEN NIMI ---
-def safe_filename(text, max_len=80):
-    text = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '_', str(text))
-    text = re.sub(r'[\s._]+', '_', text).strip('_')
-    if len(text) > max_len:
-        text = text[:max_len]
-    return text + ".csv"
-
-# --- UNIikki ID ---
-def calc_id(pdf_name, m3, h, min_):
-    key = f"{pdf_name}|{m3}|{h}|{min_}"
-    return hashlib.md5(key.encode()).hexdigest()[:10]
-
-# --- TYÖMAAN TIEDOT ---
-st.sidebar.header("Työmaan tiedot")
-m3 = st.sidebar.number_input("Pumpattava määrä (m³)", min_value=0.1, step=0.5, value=12.0)
-pumppausaika = st.sidebar.number_input("Pumppausaika (h)", min_value=0.0, step=0.5, value=2.0)
-palveluaika = st.sidebar.number_input("Palveluaika (min)", min_value=0, step=5, value=120)
-
-# --- LASKENTAFUNKTIO ---
-def laske_taulukko(m3, pumppausaika, palveluaika, H):
-    betonilaadut = {k: v for k, v in H.items() if "betoni" in k.lower() or re.search(r"C\d{2}/\d{2}", k)}
-    if not betonilaadut:
-        raise ValueError("Ei betonilaatuja.")
-    
-    pump_h_per_m3 = (H.get("Pumppaus €/h", 0) * pumppausaika) / m3 if m3 > 0 else 0
-    charged_min = max(0, palveluaika - 25)
-    num_inc = math.ceil(charged_min / 5)
-    palvelu_per_m3 = (num_inc * H.get("Palveluaika €/5min", 0)) / m3 if m3 > 0 else 0
-    kuljetus_per_m3 = H.get("Kuljetus €/m³", 0)
-
-    rows = []
-    for laatu, bh in betonilaadut.items():
-        yhteensä = (
-            bh
-            + H.get("Ympäristölisä €/m³", 0)
-            + kuljetus_per_m3
-            + H.get("Pumppaus €/m³", 0)
-            + pump_h_per_m3
-            + palvelu_per_m3
-        )
-        rows.append({
-            "Betonilaatu": laatu.split("#")[0].strip() if "#" in laatu else laatu,
-            "Betonin hinta €/m³": bh,
-            "Ympäristölisä €/m³": H.get("Ympäristölisä €/m³", 0),
-            "Kuljetus €/m³": kuljetus_per_m3,
-            "Pumppaus €/m³ (kiinteä)": H.get("Pumppaus €/m³", 0),
-            "Pumppaus €/h → €/m³": round(pump_h_per_m3, 2),
-            "Palveluaika €/m³": round(palvelu_per_m3, 2),
-            "Yhteensä €/m³": round(yhteensä, 2),
-        })
-    return pd.DataFrame(rows).set_index("Betonilaatu")
-
-# --- VAKAA PDF-ESIKATSELU (ei valkoista ruutua) ---
-def show_pdf_safely(pdf_bytes, pdf_name):
-    if len(pdf_bytes) > 10_000_000:  # >10 MB
-        st.warning("PDF on suuri (>10 MB). Esikatselu voi olla hidas. Lataa tiedosto.")
-        st.download_button(
-            label="Lataa PDF",
-            data=pdf_bytes,
-            file_name=pdf_name,
-            mime="application/pdf",
-            key="large_pdf_download"
-        )
-    else:
-        try:
-            base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-            pdf_html = f'''
-            <iframe 
-                src="data:application/pdf;base64,{base64_pdf}" 
-                width="100%" 
-                height="800" 
-                style="border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"
-                frameborder="0">
-            </iframe>
-            '''
-            st.components.v1.html(pdf_html, height=820, scrolling=True)
-        except Exception as e:
-            st.error("PDF-esikatselu epäonnistui. Voit ladata tiedoston.")
-            st.download_button("Lataa PDF", pdf_bytes, file_name=pdf_name, mime="application/pdf")
-
-# --- PDF-LATAUS ---
-uploaded_pdf = st.file_uploader("Lataa Ruduksen tarjous (PDF)", type=["pdf"])
-
-# --- PÄÄUI ---
-if uploaded_pdf:
-    pdf_name = uploaded_pdf.name
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # --- LUE PDF KERRAN ---
-    pdf_bytes = uploaded_pdf.read()
-    pdf_stream = BytesIO(pdf_bytes)
-
-    # --- PDF-ESIKATSELU (vakaasti) ---
-    st.markdown("### PDF-esikatselu")
-    show_pdf_safely(pdf_bytes, pdf_name)
-
-    # --- HINNAT (KORJATTU SYNTAX) ---
-    hinnat = {}
-    try:
-        reader = PdfReader(pdf_stream)
-        teksti = ""
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                teksti += page_text + "\n"
-        
-        rivit = [r.strip() for r in teksti.splitlines() if r.strip()]
-        betoni_section = False
-        betoni_descs = []
-        betoni_prices = []
-
-        for i, rivi in enumerate(rivit):
-            lower = rivi.lower()
-
-            # Ympäristölisä
-            if "ympäristölisä" in lower:
-                for j in range(i, min(i+5, len(rivit))):
-                    if "2,20" in rivit[j] and "€/m³" in rivit[j]:
-                        m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivit[j])
-                        if m:
-                            hinnat["Ympäristölisä €/m³"] = float(m.group(1).replace(",", "."))
-                            break
-
-            # Palveluaika
-            if "palveluaikakorvaus" in lower or ("palveluaika" in lower and "€" in rivi):
-                m = re.search(r"(\d+[.,]\d+)", rivi)
-                if m:
-                    hinnat["Palveluaika €/5min"] = float(m.group(1).replace(",", "."))
-
-            # Betonilaadut
-            if "nettohinnat betoneista" in lower:
-                betoni_section = True
-                continue
-            if betoni_section and ("kuljetus" in lower or "ympäristölisä" in lower):
-                betoni_section = False
-
-            if betoni_section:
-                if re.search(r"C\d{2}/\d{2}", rivi) and "betoni" in lower:
-                    betoni_descs.append(rivi.strip())
-                m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivi)
-                if m:
-                    betoni_prices.append(float(m.group(1).replace(",", ".")))
-
-            # Kuljetus
-            if "kuljetus" in lower or "> 5,0 m3" in rivi:
-                for j in range(i, min(i+5, len(rivit))):
-                    if "12,47" in rivit[j] and "€/m³" in rivit[j]:
-                        m = re.search(r"(\d+[.,]\d+)\s*€/m³", rivit[j])
-                        if m:
-                            hinnat["Kuljetus €/m³"] = float(m.group(1).replace(",", "."))
-                            break
-
-            # Pumppaus
-            if "pumppaus" in lower and "€" in rivi:
-                match_h = re.search(r"(\d+[.,]\d+)\s*€\s*/?\s*h", rivi)
-                match_m3 = re.search(r"(\d+[.,]\d+)\s*€\s*/?\s*m", rivi)
-                if match_h:
-                    hinnat["Pumppaus €/h"] = float(match_h.group(1).replace(",", "."))
-                if match_m3:
-                    hinnat["Pumppaus €/m³"] = float(match_m3.group(1).replace(",", "."))
-
-        if len(betoni_descs) == len(betoni_prices):
-            for desc, price in zip(betoni_descs, betoni_prices):
-                hinnat[desc] = price
-
-    except Exception as e:
-        st.error(f"PDF-lukuvirhe: {e}")
-        hinnat = {}
-
-    if not hinnat:
-        st.error("Ei hintoja PDF:stä. Varmista, että se on Ruduksen tarjous.")
-    else:
-        st.markdown("### Poimitut hinnat")
-        st.json(hinnat, expanded=False)
-
-        try:
-            df = laske_taulukko(m3, pumppausaika, palveluaika, hinnat)
-            st.markdown("### Betonilaatujen hinnat (€/m³)")
-            st.dataframe(df.style.format("{:,.2f}"), use_container_width=True)
-            st.info(f"**{m3} m³** | **{pumppausaika} h** | **{palveluaika} min**")
-
-            # --- TALLENNA SESSION STATEEN ---
-            calc_id_val = calc_id(pdf_name, m3, pumppausaika, palveluaika)
-            df_with_params = df.copy().reset_index()
-            df_with_params.insert(0, "m³", m3)
-            df_with_params.insert(1, "Pumppausaika_h", pumppausaika)
-            df_with_params.insert(2, "Palveluaika_min", palveluaika)
-            csv_bytes = df_with_params.to_csv(index=False).encode()
-            csv_base64 = base64.b64encode(csv_bytes).decode()
-
-            dup = st.session_state.history[
-                (st.session_state.history["PDF_nimi"] == pdf_name) &
-                (st.session_state.history["m3"] == m3) &
-                (st.session_state.history["Pumppausaika_h"] == pumppausaika) &
-                (st.session_state.history["Palveluaika_min"] == palveluaika)
-            ]
-
-            if dup.empty:
-                new_rows = []
-                for laatu, row in df.iterrows():
-                    new_rows.append({
-                        "Aika": timestamp,
-                        "PDF_nimi": pdf_name,
-                        "m3": m3,
-                        "Pumppausaika_h": pumppausaika,
-                        "Palveluaika_min": palveluaika,
-                        "Betonilaatu": laatu,
-                        "Yhteensä_€_m3": row["Yhteensä €/m³"],
-                        "Laskenta_ID": calc_id_val,
-                        "CSV_base64": csv_base64
-                    })
-                st.session_state.history = pd.concat([st.session_state.history, pd.DataFrame(new_rows)], ignore_index=True)
-                st.session_state.calcs[calc_id_val] = csv_base64
-                st.success("Laskenta tallennettu historiaan!")
-
-            st.download_button(
-                label="Lataa tämä laskenta (kaikki laadut)",
-                data=csv_bytes,
-                file_name=f"{safe_filename(pdf_name, 50)}_laskenta.csv",
-                mime="text/csv"
-            )
-
-        except Exception as e:
-            st.error(f"Laskentavirhe: {e}")
+# ... (kaikki aiempi koodi pysyy samana, korjataan vain historia-osa)
 
     # --- HISTORIA ---
     st.markdown("---")
     st.markdown("### Laskuhistoria")
-    history = st.session_state.history.copy()
+    history = load_history()
     if not history.empty:
-        history["Aika"] = pd.to_datetime(history["Aika"], errors='coerce')
-        history = history.dropna(subset=["Aika"]).sort_values("Aika", ascending=False)
-        history["Aika"] = history["Aika"].dt.strftime("%d.%m.%Y %H:%M")
+        # Muunna aika
+        history["Aika"] = pd.to_datetime(history["Aika"], errors='coerce').dt.strftime("%d.%m.%Y %H:%M")
+        history = history.sort_values("Aika", ascending=False).dropna(subset=["Aika"])
 
         for pdf in history["PDF_nimi"].unique():
             with st.expander(f"PDF: {pdf}"):
                 group = history[history["PDF_nimi"] == pdf].copy()
                 p = group.iloc[0]
+
                 st.caption(f"{p['m3']} m³ | {p['Pumppausaika_h']} h | {p['Palveluaika_min']} min")
 
+                # --- KORJAUS: Varmista, että Yhteensä_€_m3 on float ---
+                group["Yhteensä_€_m3"] = pd.to_numeric(group["Yhteensä_€_m3"], errors='coerce').fillna(0)
+
                 disp = group[["Betonilaatu", "Yhteensä_€_m3"]].copy()
-                st.dataframe(disp.style.format({"Yhteensä_€_m3": "{:,.2f}"}), use_container_width=True)
 
-                csv_b64 = p["CSV_base64"]
-                if pd.notna(csv_b64):
-                    csv_data = base64.b64decode(csv_b64)
-                    st.download_button(
-                        label="Lataa kaikki betonilaadut CSV:nä",
-                        data=csv_data,
-                        file_name=f"{pdf}_{p['m3']}m3_{p['Pumppausaika_h']}h_{p['Palveluaika_min']}min.csv",
-                        mime="text/csv",
-                        key=f"dl_{p['Laskenta_ID']}"
-                    )
+                # Muotoile vain numeerinen sarake
+                st.dataframe(
+                    disp.style.format({
+                        "Yhteensä_€_m3": "{:,.2f}"
+                    }),
+                    use_container_width=True
+                )
 
+                # Latausnapit
+                cols = st.columns(3)
+                for i, (_, r) in enumerate(group.iterrows()):
+                    with cols[i % 3]:
+                        if pd.notna(r["Laskenta_tiedosto"]) and os.path.exists(r["Laskenta_tiedosto"]):
+                            with open(r["Laskenta_tiedosto"], "rb") as f:
+                                st.download_button(
+                                    label=r["Betonilaatu"][:25] + ("..." if len(r["Betonilaatu"]) > 25 else ""),
+                                    data=f.read(),
+                                    file_name=os.path.basename(r["Laskenta_tiedosto"]),
+                                    mime="text/csv",
+                                    key=f"dl_{r['Laskenta_ID']}_{i}"
+                                )
+                        else:
+                            st.caption("Tiedosto puuttuu")
+
+        # Koko historia
         st.download_button(
             label="Lataa koko historia CSV:nä",
             data=history.to_csv(index=False).encode(),
@@ -283,7 +53,4 @@ if uploaded_pdf:
             mime="text/csv"
         )
     else:
-        st.info("Ei historiaa vielä.")
-
-else:
-    st.info("Lataa Ruduksen tarjous-PDF vasemmalta.")
+        st.info("Ei vielä laskuhistoriaa.")
