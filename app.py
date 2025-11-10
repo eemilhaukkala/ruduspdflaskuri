@@ -1,5 +1,4 @@
 import re
-import base64
 import pandas as pd
 import streamlit as st
 import math
@@ -11,7 +10,7 @@ from io import BytesIO
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("brick Rudus PDF -laskuri v44 — Kaikki toimii!")
+st.title("brick Rudus PDF -laskuri v45 — Esikatselu toimii!")
 
 st.sidebar.write("Python-versio: 3.9+")
 
@@ -60,7 +59,7 @@ m3 = st.sidebar.number_input("Pumpattava määrä (m³)", min_value=0.1, step=0.
 pumppausaika = st.sidebar.number_input("Pumppausaika (h)", min_value=0.0, step=0.5, value=2.0)
 palveluaika = st.sidebar.number_input("Palveluaika (min)", min_value=0, step=5, value=120)
 
-# --- LASKENTAFUNKTIO (Nyt määritelty!) ---
+# --- LASKENTAFUNKTIO ---
 def laske_taulukko(m3, pumppausaika, palveluaika, H):
     betonilaadut = {k: v for k, v in H.items() if "betoni" in k.lower() or re.search(r"C\d{2}/\d{2}", k)}
     if not betonilaadut:
@@ -106,15 +105,19 @@ if uploaded_pdf:
     pdf_bytes = uploaded_pdf.read()
     pdf_stream = BytesIO(pdf_bytes)
 
-    # --- ESIKATSELU ---
-    try:
-        base64_pdf = base64.b64encode(pdf_bytes).decode("utf-8")
-        st.markdown(
-            f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600"></iframe>',
-            unsafe_allow_html=True
+    # --- ESIKATSELU: KÄYTÄ DOWNLOAD + LINKKI (ei iframe!) ---
+    st.markdown("### PDF-esikatselu")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown(f"**{pdf_name}** – Lataa ja avaa selaimessa")
+    with col2:
+        st.download_button(
+            label="Avaa PDF",
+            data=pdf_bytes,
+            file_name=pdf_name,
+            mime="application/pdf",
+            key="pdf_preview"
         )
-    except Exception as e:
-        st.error(f"Esikatseluvirhe: {e}")
 
     # --- HINNAT ---
     hinnat = {}
@@ -191,7 +194,6 @@ if uploaded_pdf:
         st.json(hinnat, expanded=False)
 
         try:
-            # --- KÄYTÄ laske_taulukko ---
             df = laske_taulukko(m3, pumppausaika, palveluaika, hinnat)
             st.markdown("### Betonilaatujen hinnat (€/m³)")
             st.dataframe(df.style.format("{:,.2f}"), use_container_width=True)
@@ -224,7 +226,7 @@ if uploaded_pdf:
                         "PDF_nimi": pdf_name,
                         "m3": m3,
                         "Pumppausaika_h": pumppausaika,
-                        "Palveluaika_min": palveluaika,
+                        "Palveluaika_min": palvelua Babaika,
                         "Betonilaatu": laatu,
                         "Yhteensä_€_m3": row["Yhteensä €/m³"],
                         "Laskenta_ID": calc_id_val,
