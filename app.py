@@ -7,10 +7,11 @@ import hashlib
 from datetime import datetime
 from pypdf import PdfReader
 from io import BytesIO
+import base64
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("brick Rudus PDF -laskuri v46 — Toimii!")
+st.title("brick Rudus PDF -laskuri v47 — PDF näkyvissä sovelluksessa")
 
 st.sidebar.write("Python-versio: 3.9+")
 
@@ -105,19 +106,24 @@ if uploaded_pdf:
     pdf_bytes = uploaded_pdf.read()
     pdf_stream = BytesIO(pdf_bytes)
 
-    # --- ESIKATSELU: DOWNLOAD + LINKKI ---
+    # --- PDF-ESIKATSELU SUORAAN SOVELUKSESSA ---
     st.markdown("### PDF-esikatselu")
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown(f"**{pdf_name}** – Lataa ja avaa selaimessa")
-    with col2:
-        st.download_button(
-            label="Avaa PDF",
-            data=pdf_bytes,
-            file_name=pdf_name,
-            mime="application/pdf",
-            key="pdf_preview"
-        )
+    try:
+        # Koodaa base64
+        base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+        # Upota iframe (pieni koko, skaalautuu)
+        pdf_display = f'''
+        <iframe 
+            src="data:application/pdf;base64,{base64_pdf}" 
+            width="100%" 
+            height="600px" 
+            style="border: none; border-radius: 8px;">
+        </iframe>
+        '''
+        st.markdown(pdf_display, unsafe_allow_html=True)
+    except Exception as e:
+        st.warning("PDF-esikatselu ei onnistunut. Voit ladata tiedoston:")
+        st.download_button("Lataa PDF", data=pdf_bytes, file_name=pdf_name, mime="application/pdf")
 
     # --- HINNAT ---
     hinnat = {}
@@ -226,7 +232,7 @@ if uploaded_pdf:
                         "PDF_nimi": pdf_name,
                         "m3": m3,
                         "Pumppausaika_h": pumppausaika,
-                        "Palveluaika_min": palveluaika,  # KORJATTU TÄHÄN
+                        "Palveluaika_min": palveluaika,
                         "Betonilaatu": laatu,
                         "Yhteensä_€_m3": row["Yhteensä €/m³"],
                         "Laskenta_ID": calc_id_val,
