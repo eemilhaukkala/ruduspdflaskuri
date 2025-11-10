@@ -6,11 +6,11 @@ import math
 import os
 import hashlib
 from datetime import datetime
-from PyPDF2 import PdfReader  # TOIMII CLOUDSISSA!
+from pypdf import PdfReader  # TOIMII CLOUDSISSA!
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("brick Rudus PDF -laskuri v41 — Toimii Streamlit Cloudissa")
+st.title("brick Rudus PDF -laskuri v42 — Toimii Streamlit Cloudissa")
 
 st.sidebar.write("Python-versio: 3.9+")
 
@@ -62,8 +62,8 @@ palveluaika = st.sidebar.number_input("Palveluaika (min)", min_value=0, step=5, 
 # --- PDF-LATAUS ---
 uploaded_pdf = st.file_uploader("Lataa Ruduksen tarjous (PDF)", type=["pdf"])
 
-# --- HINTOJEN POIMINTA (PyPDF2 + regex) ---
-def hae_hinnat_pypdf2(pdf_file):
+# --- HINTOJEN POIMINTA (pypdf + regex) ---
+def hae_hinnat_pypdf(pdf_file):
     hinnat = {}
     teksti = ""
     try:
@@ -129,9 +129,8 @@ def hae_hinnat_pypdf2(pdf_file):
             if match_h:
                 hinnat["Pumppaus €/h"] = float(match_h.group(1).replace(",", "."))
             if match_m3:
-                hinnat["Pumppaus €/m³"]  = float(match_m3.group(1).replace(",", "."))
+                hinnat["Pumppaus €/m³"] = float(match_m3.group(1).replace(",", "."))
 
-    # Yhdistä betoni
     if len(betoni_descs) == len(betoni_prices):
         for desc, price in zip(betoni_descs, betoni_prices):
             hinnat[desc] = price
@@ -177,7 +176,7 @@ if uploaded_pdf:
     pdf_name = uploaded_pdf.name
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Esikatselu (base64)
+    # Esikatselu
     try:
         base64_pdf = base64.b64encode(uploaded_pdf.read()).decode("utf-8")
         st.markdown(f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600"></iframe>', unsafe_allow_html=True)
@@ -185,8 +184,7 @@ if uploaded_pdf:
     except Exception as e:
         st.error(f"Esikatseluvirhe: {e}")
 
-    # KÄYTÄ PyPDF2
-    hinnat = hae_hinnat_pypdf2(uploaded_pdf)
+    hinnat = hae_hinnat_pypdf(uploaded_pdf)
     if not hinnat:
         st.error("Ei hintoja PDF:stä. Varmista, että se on Ruduksen tarjous.")
     else:
@@ -199,7 +197,7 @@ if uploaded_pdf:
             st.dataframe(df.style.format("{:,.2f}"), use_container_width=True)
             st.info(f"**{m3} m³** | **{pumppausaika} h** | **{palveluaika} min**")
 
-            # --- TALLENNA KOKO TAULUKKO + RIVIT ---
+            # TALLENNA
             history = load_history()
             calc_id_val = calc_id(pdf_name, m3, pumppausaika, palveluaika)
             safe_name = safe_filename(f"{pdf_name}_{m3}m3_{pumppausaika}h_{palveluaika}min_{calc_id_val}")
@@ -236,7 +234,6 @@ if uploaded_pdf:
                 save_history(history)
                 st.success(f"Tallennettu: `{safe_name}`")
 
-            # Lataa heti
             st.download_button(
                 label="Lataa tämä laskenta (kaikki laadut)",
                 data=df.to_csv().encode(),
@@ -247,7 +244,7 @@ if uploaded_pdf:
         except Exception as e:
             st.error(f"Laskentavirhe: {e}")
 
-    # --- HISTORIA: ESIKATSELU + YKSI NAPPI ---
+    # --- HISTORIA ---
     st.markdown("---")
     st.markdown("### Laskuhistoria")
     history = load_history()
@@ -263,10 +260,7 @@ if uploaded_pdf:
                 st.caption(f"{p['m3']} m³ | {p['Pumppausaika_h']} h | {p['Palveluaika_min']} min")
 
                 disp = group[["Betonilaatu", "Yhteensä_€_m3"]].copy()
-                st.dataframe(
-                    disp.style.format({"Yhteensä_€_m3": "{:,.2f}"}),
-                    use_container_width=True
-                )
+                st.dataframe(disp.style.format({"Yhteensä_€_m3": "{:,.2f}"}), use_container_width=True)
 
                 calc_file = p["Laskenta_tiedosto"]
                 if pd.notna(calc_file) and os.path.exists(calc_file):
