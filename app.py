@@ -10,7 +10,7 @@ from pypdf import PdfReader  # TOIMII CLOUDSISSA!
 
 # --- ASETTELU ---
 st.set_page_config(page_title="Rudus PDF -laskuri", page_icon="brick", layout="wide")
-st.title("brick Rudus PDF -laskuri v42 — Toimii Streamlit Cloudissa")
+st.title("Jonen mallin betonilaskuri")
 
 st.sidebar.write("Python-versio: 3.9+")
 
